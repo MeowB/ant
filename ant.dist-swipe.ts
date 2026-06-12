@@ -273,6 +273,71 @@ const cleanDepletedTargets = (
     }
 };
 
+const findNearestResourceFromCell = (
+    startIndex: number,
+    prefixPath: number[],
+    cells: Cell[]
+): ResourceNode | undefined => {
+    const queue: { index: number; distance: number; path: number[] }[] = [{
+        index: startIndex,
+        distance: 0,
+        path: [startIndex]
+    }];
+    const visited = new Set<number>([startIndex]);
+
+    while (queue.length > 0) {
+        const current = queue.shift()!;
+        const currentCell = cells[current.index];
+
+        if (
+            current.index !== startIndex &&
+            currentCell.resources > 0 &&
+            (currentCell.type === 1 || currentCell.type === 2)
+        ) {
+            return {
+                type: currentCell.type,
+                index: current.index,
+                distance: prefixPath.length + current.distance - 1,
+                amount: currentCell.resources,
+                path: [...prefixPath, ...current.path.slice(1)]
+            };
+        }
+
+        for (const neighborIndex of currentCell.neighbors) {
+            if (neighborIndex === -1) continue;
+            if (visited.has(neighborIndex)) continue;
+
+            visited.add(neighborIndex);
+
+            queue.push({
+                index: neighborIndex,
+                distance: current.distance + 1,
+                path: [...current.path, neighborIndex]
+            });
+        }
+    }
+
+    return undefined;
+};
+
+const handoffEmptyEggTargets = (
+    activeResourcePaths: Map<number, ResourceNode>,
+    cells: Cell[]
+): void => {
+    for (const [targetIndex, target] of [...activeResourcePaths]) {
+        if (target.type !== 1) continue;
+        if (cells[target.index].resources > 0) continue;
+
+        const successor = findNearestResourceFromCell(target.index, target.path, cells);
+
+        activeResourcePaths.delete(targetIndex);
+
+        if (successor) {
+            activeResourcePaths.set(successor.index, successor);
+        }
+    }
+};
+
 // ==========================================
 // Scoring
 // ==========================================
@@ -383,6 +448,7 @@ while (true) {
     const eggs = findResourcesByDistanceFromBases(cells, myBaseIndexes, 1);
     const crystals = findResourcesByDistanceFromBases(cells, myBaseIndexes, 2);
 
+    handoffEmptyEggTargets(activeResourcePaths, cells);
     cleanDepletedTargets(activeResourcePaths, cells);
 
     const activeTargetLimit = Math.max(1, Math.min(6, Math.floor(myTotalAnts / 4)));
@@ -429,6 +495,7 @@ while (true) {
 
             for (const neighborIndex of cells[target.index].neighbors) {
                 if (neighborIndex === -1) continue;
+				if (cells[neighborIndex].resources <= 0) continue
 
                 addBeacon(neighborIndex, 1);
             }
