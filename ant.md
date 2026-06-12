@@ -682,3 +682,275 @@ Focus:
 3. Prevent target switching between equal-value resources.
 4. Make sweep incremental instead of opening too many crystal paths.
 5. Reintroduce stealing only after local egg income is stable.
+
+### Session 4 - Dist Swipe, Road Taps and Boss-Test Triage
+
+This session was mostly die-and-retry. The goal was no longer to build a beautiful strategy; it was to recover a reliable bot after several promising ideas started fighting each other.
+
+The best ranked result came from a simpler distance-based strategy: close eggs first, then crystal pressure, with active memory and profitability scoring. It reached rank 2 briefly, then later rank 5 during road-tap experiments, but the exact saved version was lost during manual file swapping.
+
+Files involved:
+
+* `ant.dist-swipe.ts`
+* `ant.dist-swipe-530.ts`
+* `ant.road-tap.ts`
+* `rank2bronze.ts` existed briefly as a recovered candidate, then disappeared during file churn.
+
+---
+
+#### Dist Swipe Strategy
+
+Core idea:
+
+```
+Close eggs first.
+Then crystals.
+Do not chase everything.
+Keep active roads alive.
+```
+
+What worked:
+
+* Removing broad phases reduced overthinking.
+* Active memory helped avoid target churn.
+* Profitability scoring avoided some bad mineral patches.
+* Side taps worked when they were small and local.
+* Close eggs with high beacon strength were strong.
+* Ignoring eggs too close to enemy bases avoided pointless contests.
+
+What failed:
+
+* Far eggs pulled ants across the map.
+* When far eggs depleted, committed ants withdrew instead of converting cleanly into crystal harvest.
+* Switching depleted eggs to nearest local resources sounded good, but ranked much worse.
+* Trying to ignore enemy-safe crystals broke useful enemy-line roads.
+
+Lesson:
+
+The bot wins more from boring, nearby growth than from clever long-distance stealing.
+
+---
+
+#### Close Egg Gate
+
+A major rule emerged:
+
+```
+If close eggs exist, focus them.
+Otherwise mine.
+```
+
+Regular eggs were eventually removed from broad activation because they caused overextension. Close eggs remained valuable, especially within distance 2 or 3 depending on tuning.
+
+Important caveat:
+
+Egg acquisition cannot become so weak that the boss outgrows us. Any anti-sprawl rule that blocks close egg pickup is too expensive.
+
+---
+
+#### Crystal Baseline Pressure
+
+Several games were lost because the map had one important mineral patch and many eggs. The bot built economy while the boss mined.
+
+A rule was added:
+
+```
+Always pressure the closest crystal every turn.
+```
+
+Later this became a small closest-crystal cluster:
+
+```
+closest crystal distance + 1
+```
+
+What worked:
+
+* Prevented stupid losses where the only good crystal was ignored.
+* Kept some scoring alive during egg-heavy openings.
+
+What needs tuning:
+
+* Beacon strength should be capped by remaining resources.
+* A 3-strength road into a patch with 1 resource left wastes ants.
+
+---
+
+#### Road Tap Strategy
+
+New strategy idea:
+
+After close eggs are handled, build roads and tap adjacent resources from those roads.
+
+The first version:
+
+* Added beacons to resources adjacent to committed roads.
+* Kept sticky memory for touched patches.
+* Added taps when ants physically passed next to resources.
+
+What worked:
+
+* Sticky road taps harvested useful side crystals.
+* Ants passing near resources could opportunistically harvest them.
+* Some ranked results improved.
+
+What failed:
+
+* Sticky taps became too sticky.
+* Empty nodes were sometimes kept alive too long.
+* Side taps started spawning more side taps.
+* Random ants created map-wide crystal sprawl.
+* Main crystal roads lost density.
+
+Lesson:
+
+Taps are good only when they stay local. Strength-1 taps must not become new expansion roots.
+
+---
+
+#### Sticky Tap Rules
+
+Rules that survived:
+
+* A patch that has resources and gets tapped can remain sticky.
+* A sticky tap is removed only when the patch is empty.
+* Crystal taps from committed roads are useful.
+* Egg taps from passing ants are useful because growth is time-sensitive.
+
+Rules that failed:
+
+* Tapping empty neighboring nodes.
+* Making all ant-adjacent crystal taps sticky.
+* Letting weak side taps recursively expand.
+* Blocking all taps on immune crystal roads.
+
+Current preferred split:
+
+```
+Committed strong roads:
+  may tap adjacent crystals and eggs.
+
+Random ant positions:
+  may tap adjacent eggs only.
+
+Strength-1 side taps:
+  should not create more taps.
+```
+
+---
+
+#### Tap Immunity
+
+Problem:
+
+The initial closest-crystal road could be corrupted by opportunistic egg taps. Ants left the main mining pipe to grab eggs on the side.
+
+Tried rule:
+
+```
+Initial crystal road is immune to tapping.
+```
+
+Failure:
+
+This also blocked valuable adjacent crystals, so the bot missed obvious mineral income.
+
+Better rule:
+
+```
+Tap-immune roads block egg taps only.
+Crystal taps are still allowed.
+```
+
+Lesson:
+
+Immunity should protect mining density from egg distractions, not blind the bot to nearby crystals.
+
+---
+
+#### Boss Test Failures
+
+Several boss losses had the same shape:
+
+* Our roads existed visually.
+* The boss harvested more.
+* Our ants looked present but did not produce enough from the intended patch.
+
+Root cause:
+
+The road was not always a strong pipe. Many visible roads were only strength-1 taps. Harvesting depends on the weakest link, not on whether a beacon exists.
+
+Observed pattern:
+
+```
+Strong main road harvests.
+Weak side tap looks connected but barely harvests.
+Too many weak taps dilute the main road.
+Boss keeps one cleaner pipe and wins.
+```
+
+The important distinction:
+
+* A beacon is intent.
+* An ant chain is capacity.
+* Harvesting is capacity at the weakest link.
+
+---
+
+#### Failed Ideas Worth Remembering
+
+Do not repeat these without a new reason:
+
+* Broad far-egg acquisition.
+* Switching depleted eggs to nearest resource automatically.
+* Ignoring enemy-farthest crystals globally.
+* Treating any ant position as a full expansion root.
+* Making every nearby crystal sticky from random ants.
+* Blocking all taps on crystal roads.
+* Opening too many active targets because the score says they are profitable.
+
+Each one looked sensible locally. Each one made the pipe weaker globally.
+
+---
+
+#### Current Working Theory
+
+The bot does not need more clever scoring right now.
+
+It needs stricter acquisition discipline:
+
+```
+Close eggs are allowed.
+Closest crystal pressure is mandatory.
+Committed roads may tap.
+Weak taps must not expand.
+Far eggs are mostly bait.
+Crystal density beats pretty coverage.
+```
+
+Current tactical direction:
+
+1. Keep close egg farming.
+2. Keep the closest crystal or closest crystal cluster pressured every turn.
+3. Keep active target memory.
+4. Keep sticky taps, but only for real resources.
+5. Prevent strength-1 side taps from becoming new roads.
+6. Allow opportunistic egg pickup from passing ants.
+7. Avoid broad far-egg acquisition unless the map is already won.
+
+---
+
+### Next Session
+
+Purpose:
+
+Recover a stable boss-beating version before chasing rank again.
+
+Focus:
+
+1. Freeze one known file before ranking.
+2. Run the same three boss tests after every edit.
+3. Tune close egg distance and strength manually.
+4. Cap beacon strength by remaining resources.
+5. Keep road taps local to committed roads.
+6. Stop editing once the three boss tests pass.
