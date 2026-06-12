@@ -358,6 +358,18 @@ const isSafeEgg = (resource: ResourceNode): boolean => {
     return resource.type === 1 && oppDistances[resource.index] >= 3;
 };
 
+const getStealableCrystals = (crystals: ResourceNode[]): ResourceNode[] => {
+    if (crystals.length <= 1) {
+        return crystals;
+    }
+
+    const closestCrystals = [...crystals].sort((a, b) => a.distance - b.distance);
+    const keepCount = Math.ceil(closestCrystals.length / 2);
+    const stealableCrystals = closestCrystals.slice(0, keepCount);
+
+    return stealableCrystals.length > 0 ? stealableCrystals : crystals;
+};
+
 // ==========================================
 // Game loop
 // ==========================================
@@ -385,10 +397,11 @@ while (true) {
     const safeEggs = eggs.filter(isSafeEgg);
     const closeEggs = safeEggs.filter(isCloseEgg);
     const regularEggs = safeEggs.filter(egg => !isCloseEgg(egg));
+    const stealableCrystals = getStealableCrystals(crystals);
 
     activateTargets(closeEggs, cells, activeTargetLimit);
     activateTargets(regularEggs, cells, activeTargetLimit);
-    activateTargets(crystals, cells, activeTargetLimit);
+    activateTargets(stealableCrystals, cells, activeTargetLimit);
 
     const beaconStrengths = new Map<number, number>();
 
@@ -406,7 +419,7 @@ while (true) {
         const strength = isCloseEgg(target)
             ? 4
             : target.type === 1
-                ? 3
+                ? 2
                 : 1;
 
         for (const pathIndex of target.path) {
