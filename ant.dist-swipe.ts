@@ -59,7 +59,7 @@ const cells = parseCells();
 
 parseInt(readline());
 const myBaseIndexes = readline().split(' ').map(Number);
-readline();
+const oppBaseIndexes = readline().split(' ').map(Number);
 
 const activeResourcePaths = new Map<number, ResourceNode>();
 
@@ -116,6 +116,35 @@ const findResourcesByDistanceFromBases = (
 
     return resources.sort((a, b) => a.distance - b.distance);
 };
+
+const getDistancesFromCells = (
+    cells: Cell[],
+    startIndexes: number[]
+): number[] => {
+    const distances = Array(cells.length).fill(Infinity);
+    const queue: number[] = [...startIndexes];
+
+    for (const startIndex of startIndexes) {
+        distances[startIndex] = 0;
+    }
+
+    while (queue.length > 0) {
+        const currentIndex = queue.shift()!;
+        const currentCell = cells[currentIndex];
+
+        for (const neighborIndex of currentCell.neighbors) {
+            if (neighborIndex === -1) continue;
+            if (distances[neighborIndex] !== Infinity) continue;
+
+            distances[neighborIndex] = distances[currentIndex] + 1;
+            queue.push(neighborIndex);
+        }
+    }
+
+    return distances;
+};
+
+const oppDistances = getDistancesFromCells(cells, oppBaseIndexes);
 
 // ==========================================
 // Path analysis
@@ -325,6 +354,10 @@ const isCloseEgg = (resource: ResourceNode): boolean => {
     return resource.type === 1 && resource.distance <= 2;
 };
 
+const isSafeEgg = (resource: ResourceNode): boolean => {
+    return resource.type === 1 && oppDistances[resource.index] >= 3;
+};
+
 // ==========================================
 // Game loop
 // ==========================================
@@ -349,8 +382,9 @@ while (true) {
 
     const activeTargetLimit = Math.max(1, Math.min(6, Math.floor(myTotalAnts / 4)));
 
-    const closeEggs = eggs.filter(isCloseEgg);
-    const regularEggs = eggs.filter(egg => !isCloseEgg(egg));
+    const safeEggs = eggs.filter(isSafeEgg);
+    const closeEggs = safeEggs.filter(isCloseEgg);
+    const regularEggs = safeEggs.filter(egg => !isCloseEgg(egg));
 
     activateTargets(closeEggs, cells, activeTargetLimit);
     activateTargets(regularEggs, cells, activeTargetLimit);
