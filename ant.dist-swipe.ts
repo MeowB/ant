@@ -262,7 +262,12 @@ const cleanDepletedTargets = (
         const targetCellIsEmpty = cells[target.index].resources <= 0;
         const corridorIsEmpty = getCorridorRemainingResourceAmount(target, cells) <= 0;
 
-        if (targetCellIsEmpty || corridorIsEmpty) {
+        if (target.type === 2 && targetCellIsEmpty) {
+            activeResourcePaths.delete(targetIndex);
+            continue;
+        }
+
+        if (target.type !== 2 && (targetCellIsEmpty || corridorIsEmpty)) {
             activeResourcePaths.delete(targetIndex);
         }
     }
@@ -358,18 +363,6 @@ const isSafeEgg = (resource: ResourceNode): boolean => {
     return resource.type === 1 && oppDistances[resource.index] >= 3;
 };
 
-const getStealableCrystals = (crystals: ResourceNode[]): ResourceNode[] => {
-    if (crystals.length <= 1) {
-        return crystals;
-    }
-
-    const closestCrystals = [...crystals].sort((a, b) => a.distance - b.distance);
-    const keepCount = Math.ceil(closestCrystals.length / 2);
-    const stealableCrystals = closestCrystals.slice(0, keepCount);
-
-    return stealableCrystals.length > 0 ? stealableCrystals : crystals;
-};
-
 // ==========================================
 // Game loop
 // ==========================================
@@ -397,11 +390,10 @@ while (true) {
     const safeEggs = eggs.filter(isSafeEgg);
     const closeEggs = safeEggs.filter(isCloseEgg);
     const regularEggs = safeEggs.filter(egg => !isCloseEgg(egg));
-    const stealableCrystals = getStealableCrystals(crystals);
 
     activateTargets(closeEggs, cells, activeTargetLimit);
     activateTargets(regularEggs, cells, activeTargetLimit);
-    activateTargets(stealableCrystals, cells, activeTargetLimit);
+    activateTargets(crystals, cells, activeTargetLimit);
 
     const beaconStrengths = new Map<number, number>();
 
@@ -411,7 +403,13 @@ while (true) {
     };
 
     for (const [targetIndex, target] of [...activeResourcePaths]) {
-        if (getCorridorRemainingResourceAmount(target, cells) <= 0) {
+        const targetCellIsEmpty = cells[target.index].resources <= 0;
+        const shouldClearTarget =
+            target.type === 2
+                ? targetCellIsEmpty
+                : getCorridorRemainingResourceAmount(target, cells) <= 0;
+
+        if (shouldClearTarget) {
             activeResourcePaths.delete(targetIndex);
             continue;
         }
@@ -424,6 +422,16 @@ while (true) {
 
         for (const pathIndex of target.path) {
             addBeacon(pathIndex, strength);
+        }
+
+        if (target.type === 2) {
+            addBeacon(target.index, 1);
+
+            for (const neighborIndex of cells[target.index].neighbors) {
+                if (neighborIndex === -1) continue;
+
+                addBeacon(neighborIndex, 1);
+            }
         }
 
         for (const adjacentResource of getAdjacentResourcesOnPath(target, cells)) {
