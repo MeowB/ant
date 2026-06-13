@@ -940,17 +940,158 @@ Current tactical direction:
 
 ---
 
+### Session 5 - Strategy Featurization and Tuning Roadmap
+
+This session moved the bot away from one giant behavior blob and toward named strategies that can be inspected and tuned separately.
+
+The runtime is still a single CodinGame file:
+
+* `ant.ts`
+
+The strategy folder is documentation only:
+
+* `strategies/crystal-rush.md`
+* `strategies/egg-rush.md`
+* `strategies/scarce-crystal-bank.md`
+* `strategies/big-map-mixed.md`
+* `strategies/default-mixed.md`
+
+No imports, no bundler, no build step. CodinGame still gets one pasted file.
+
+---
+
+#### Strategy Modes
+
+The bot now chooses one strategy from the initial map profile:
+
+* `CRYSTAL_RUSH`
+* `EGG_RUSH`
+* `SCARCE_CRYSTAL_BANK`
+* `BIG_MAP_MIXED`
+* `DEFAULT_MIXED`
+
+The selected strategy is shown every turn with:
+
+```
+MESSAGE strategyName
+```
+
+This makes replay review much easier because bad behavior can be tied to the strategy that caused it.
+
+---
+
+#### Map Profile Debugging
+
+At game start, the bot logs:
+
+* base indexes,
+* selected strategy,
+* crystal goal,
+* egg node count and total amount,
+* crystal node count and total amount,
+* close/reachable resource amounts,
+* closest resources,
+* richest resources.
+
+Per turn, it logs:
+
+* turn,
+* phase,
+* total ants,
+* remaining available ants,
+* committed targets,
+* skipped targets.
+
+This gives enough information to decide whether the strategy choice was wrong or whether the chosen strategy executed badly.
+
+---
+
+#### Strategy Playbooks
+
+The old `switch(strategyMode)` was refactored into named playbook functions inside `ant.ts`:
+
+* `runCrystalRush`
+* `runEggRush`
+* `runScarceCrystalBank`
+* `runBigMapMixed`
+* `runDefaultMixed`
+
+The goal is readability. Each strategy should be easy to inspect without mentally untangling the whole bot.
+
+---
+
+#### Egg Rush Bug Found
+
+A replay showed a major contradiction:
+
+```
+MESSAGE EGG_RUSH
+```
+
+But the bot ignored eggs.
+
+Observed behavior:
+
+* It picked `EGG_RUSH`.
+* It harvested the first close egg.
+* Then it spent most of the early budget on crystal `11`.
+* The close egg refresh was skipped because crystal pressure consumed the budget.
+* Distance-6 rich eggs were skipped forever because their cost was slightly above the default cap.
+* Late game sometimes output only `MESSAGE` because all full-strength mineral paths were too expensive.
+
+Root causes:
+
+* `runEggRush` committed an opening crystal before eggs.
+* Strategic egg cap was too strict for real egg-rush maps.
+* No fallback existed when strength-3 crystal paths were unaffordable.
+
+Fix:
+
+* `EGG_RUSH` now commits urgent eggs before crystals.
+* `EGG_RUSH` strategic eggs use a higher cap: `14`.
+* Urgent eggs stay relevant after turn 7.
+* Mineral commits can fall back to strength 2, then strength 1, instead of outputting only `MESSAGE`.
+
+Lesson:
+
+Strategy names are only useful if the playbook actually obeys them. Very rude of the bot, honestly.
+
+---
+
+#### Current Working Theory
+
+The bot should not try to find one universal strategy.
+
+Different map shapes need different behavior:
+
+* Close high-value crystals: rush crystals.
+* Rich reachable eggs and weak close crystals: rush eggs.
+* Scarce crystals: bank nearby crystals before economy greed.
+* Big maps: mix eggs and crystals.
+* Unclear maps: default balanced play.
+
+The next improvement is not another grand rewrite.
+
+The next improvement is tuning each named strategy independently.
+
+---
+
 ### Next Session
 
 Purpose:
 
-Recover a stable boss-beating version before chasing rank again.
+Fine tune every strategy one by one.
 
 Focus:
 
-1. Freeze one known file before ranking.
-2. Run the same three boss tests after every edit.
-3. Tune close egg distance and strength manually.
-4. Cap beacon strength by remaining resources.
-5. Keep road taps local to committed roads.
-6. Stop editing once the three boss tests pass.
+1. Test `CRYSTAL_RUSH` maps and tune crystal target count, strength, and egg allowance.
+2. Test `EGG_RUSH` maps and tune urgent egg limits, strategic egg cap, and crystal timing.
+3. Test `SCARCE_CRYSTAL_BANK` maps and make sure eggs do not distract from quick scoring.
+4. Test `BIG_MAP_MIXED` maps and prevent thin overexpansion.
+5. Test `DEFAULT_MIXED` maps and identify cases that deserve a new named strategy.
+6. Use HUD `MESSAGE` plus debug logs to classify every loss.
+7. Update the matching file in `strategies/` after each tuning pass.
+
+Rule:
+
+Tune one strategy at a time. Do not fix every bad replay with one global formula.

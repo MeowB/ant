@@ -413,14 +413,18 @@ while (true) {
 		return true;
 	};
 
-	const commitCrystals = (candidates: ResourceNode[], targetLimit: number): void => {
+	const commitCrystals = (
+		candidates: ResourceNode[],
+		targetLimit: number,
+		strength = MINERAL_BEACON_STRENGTH
+	): void => {
 		const remainingCrystals = [...candidates];
 		let committedMineralTargets = 0;
 
 		while (remainingCrystals.length > 0 && committedMineralTargets < targetLimit) {
 			remainingCrystals.sort((a, b) => {
-				const additionalCostA = getAdditionalPathCost(a.path, MINERAL_BEACON_STRENGTH, committedPathStrengths);
-				const additionalCostB = getAdditionalPathCost(b.path, MINERAL_BEACON_STRENGTH, committedPathStrengths);
+				const additionalCostA = getAdditionalPathCost(a.path, strength, committedPathStrengths);
+				const additionalCostB = getAdditionalPathCost(b.path, strength, committedPathStrengths);
 
 				if (additionalCostA !== additionalCostB) return additionalCostA - additionalCostB;
 				if (a.amount !== b.amount) return b.amount - a.amount;
@@ -429,7 +433,7 @@ while (true) {
 
 			const crystal = remainingCrystals.shift()!;
 
-			if (tryCommitPath(crystal, MINERAL_BEACON_STRENGTH)) {
+			if (tryCommitPath(crystal, strength)) {
 				committedMineralTargets++;
 			}
 		}
@@ -507,15 +511,15 @@ while (true) {
 
 	const runEggRush = (): void => {
 		if (turn <= 7) {
-			commitCrystals(openingCrystals, 1);
 			commitEggs(urgentEggs, 3);
-			commitStrategicEggs(3);
+			commitStrategicEggs(3, 14);
 			commitCrystals(openingCrystals, 1);
 			return;
 		}
 
+		commitEggs(urgentEggs, 2);
+		commitStrategicEggs(3, 14);
 		commitCrystals(openingCrystals, 1);
-		commitStrategicEggs(2);
 		commitCrystals(crystals, mineralTargetLimit);
 	};
 
@@ -542,6 +546,14 @@ while (true) {
 	};
 
 	strategyPlanners[strategyMode]();
+
+	if (committedTargetLogs.length === 0) {
+		commitCrystals(crystals, Math.max(1, Math.floor(myTotalAnts / 8)), 2);
+	}
+
+	if (committedTargetLogs.length === 0) {
+		commitCrystals(crystals, 1, 1);
+	}
 
 	for (const stickyIndex of [...stickyBeaconIndexes]) {
 		if (!committedPathStrengths.has(stickyIndex)) {
