@@ -217,6 +217,18 @@ const isContestedEgg = (egg: ResourceNode): boolean => {
 	);
 };
 
+const isLosingCrystalRace = (crystal: ResourceNode): boolean => {
+	const crystalCell = cells[crystal.index];
+	const oppDistance = oppDistances[crystal.index];
+
+	return (
+		crystal.type === CRYSTAL &&
+		crystalCell.oppAnts > 0 &&
+		crystalCell.myAnts === 0 &&
+		crystal.distance > oppDistance
+	);
+};
+
 const formatResourceSummary = (resources: ResourceNode[], limit: number): string => {
 	return resources
 		.slice(0, limit)
@@ -381,6 +393,7 @@ while (true) {
 	let availableAnts = myTotalAnts;
 	const committedTargetLogs: string[] = [];
 	const skippedTargetLogs: string[] = [];
+	const skippedRaceCrystalIndexes = new Set<number>();
 	const phase = `${strategyMode}:${urgentEggs.length > 0 ? 'EGG' : 'MINERAL'}`;
 
 	const tryCommitPath = (resource: ResourceNode, strength: number): boolean => {
@@ -418,7 +431,18 @@ while (true) {
 		targetLimit: number,
 		strength = MINERAL_BEACON_STRENGTH
 	): void => {
-		const remainingCrystals = [...candidates];
+		const remainingCrystals = candidates.filter(crystal => {
+			if (!isLosingCrystalRace(crystal)) return true;
+
+			if (!skippedRaceCrystalIndexes.has(crystal.index)) {
+				skippedRaceCrystalIndexes.add(crystal.index);
+				skippedTargetLogs.push(
+					`crystal:${crystal.index}/d${crystal.distance}/a${crystal.amount}/oppMining${cells[crystal.index].oppAnts}/oppD${oppDistances[crystal.index]}/raceLost`
+				);
+			}
+
+			return false;
+		});
 		let committedMineralTargets = 0;
 
 		while (remainingCrystals.length > 0 && committedMineralTargets < targetLimit) {
