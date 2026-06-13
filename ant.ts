@@ -1,663 +1,248 @@
 /**
  * CodinGame Spring Challenge 2023 - Ants
  *
- * Strategy:
- * - Economy mode: prioritize fast egg acquisition.
- * - Mid game: harvest multiple nearby/resource-rich targets.
- * - Pressure/Kill mode: switch harder into crystals only when force projection is realistic.
+ * Fresh strategy shell:
+ * - Harvest close eggs while reachable close eggs exist.
+ * - Require enough ants before committing to any resource road.
+ * - Keep tagged healthy roads sticky at low strength.
+ * - After close eggs, swipe all reachable crystals.
  */
 
 interface Cell {
-    type: number;
-    resources: number;
-    neighbors: number[];
-    myAnts: number;
-    oppAnts: number;
+	type: number;
+	resources: number;
+	neighbors: number[];
+	myAnts: number;
+	oppAnts: number;
 }
 
 interface ResourceNode {
-    type: number;
-    distance: number;
-    index: number;
-    amount: number;
-    path: number[];
+	type: number;
+	index: number;
+	baseIndex: number;
+	amount: number;
+	distance: number;
+	path: number[];
 }
 
-// ==========================================
-// Initial parsing
-// ==========================================
+const EGG = 1;
+const CRYSTAL = 2;
+const URGENT_EGG_DISTANCE = 2;
+const MINERAL_BEACON_STRENGTH = 3;
+const MINERAL_TARGET_ANT_DIVISOR = 6;
 
 const numberOfCells: number = parseInt(readline());
 
-const parseCells = (): Cell[] => {
-    const result: Cell[] = [];
+const cells: Cell[] = [];
 
-    for (let i = 0; i < numberOfCells; i++) {
-        const inputs = readline().split(' ').map(Number);
+for (let i = 0; i < numberOfCells; i++) {
+	const inputs = readline().split(' ').map(Number);
 
-        result.push({
-            type: inputs[0],
-            resources: inputs[1],
-            neighbors: inputs.slice(2, 8),
-            myAnts: 0,
-            oppAnts: 0
-        });
-    }
-
-    return result;
-};
-
-const cells = parseCells();
+	cells.push({
+		type: inputs[0],
+		resources: inputs[1],
+		neighbors: inputs.slice(2, 8),
+		myAnts: 0,
+		oppAnts: 0
+	});
+}
 
 parseInt(readline());
 const myBaseIndexes = readline().split(' ').map(Number);
-const oppBaseIndexes = readline().split(' ').map(Number);
+readline();
 
-// Resource index -> full base-connected path
-const activeResourcePaths = new Map<number, ResourceNode>();
+const stickyBeaconIndexes = new Set<number>();
+let turn = 0;
 
-// ==========================================
-// Base-connected BFS
-// ==========================================
+const findResourcesFromBase = (baseIndex: number, resourceType: number): ResourceNode[] => {
+	const visited = new Set<number>();
+	const queue: { index: number; distance: number; path: number[] }[] = [{
+		index: baseIndex,
+		distance: 0,
+		path: [baseIndex]
+	}];
+	const resources: ResourceNode[] = [];
 
-const findResourcesByDistanceFromBases = (
-    cells: Cell[],
-    startIndexes: number[],
-    resourceType: number
-): ResourceNode[] => {
-    const queue: { index: number; distance: number; path: number[] }[] = startIndexes.map(startIndex => ({
-        index: startIndex,
-        distance: 0,
-        path: [startIndex]
-    }));
+	visited.add(baseIndex);
 
-    const visited = new Set<number>();
+	while (queue.length > 0) {
+		const current = queue.shift()!;
+		const currentCell = cells[current.index];
 
-    for (const startIndex of startIndexes) {
-        visited.add(startIndex);
-    }
+		if (currentCell.type === resourceType && currentCell.resources > 0) {
+			resources.push({
+				type: currentCell.type,
+				index: current.index,
+				baseIndex,
+				amount: currentCell.resources,
+				distance: current.distance,
+				path: current.path
+			});
+		}
 
-    const resources: ResourceNode[] = [];
+		for (const neighborIndex of currentCell.neighbors) {
+			if (neighborIndex === -1) continue;
+			if (visited.has(neighborIndex)) continue;
 
-    while (queue.length > 0) {
-        const current = queue.shift()!;
-        const currentCell = cells[current.index];
+			visited.add(neighborIndex);
+			queue.push({
+				index: neighborIndex,
+				distance: current.distance + 1,
+				path: [...current.path, neighborIndex]
+			});
+		}
+	}
 
-        if (currentCell.type === resourceType && currentCell.resources > 0) {
-            resources.push({
-                type: currentCell.type,
-                index: current.index,
-                distance: current.distance,
-                amount: currentCell.resources,
-                path: current.path
-            });
-        }
-
-        for (const neighborIndex of currentCell.neighbors) {
-            if (neighborIndex === -1) continue;
-            if (visited.has(neighborIndex)) continue;
-
-            visited.add(neighborIndex);
-
-            queue.push({
-                index: neighborIndex,
-                distance: current.distance + 1,
-                path: [...current.path, neighborIndex]
-            });
-        }
-    }
-
-    return resources.sort((a, b) => a.distance - b.distance);
+	return resources.sort((a, b) => {
+		if (a.distance !== b.distance) return a.distance - b.distance;
+		return b.amount - a.amount;
+	});
 };
 
-const getDistancesFromCells = (
-    cells: Cell[],
-    startIndexes: number[]
-): number[] => {
-    const distances = Array(cells.length).fill(Infinity);
-    const queue: number[] = [...startIndexes];
+const findResourcesFromClosestBases = (resourceType: number): ResourceNode[] => {
+	const resourcesByIndex = new Map<number, ResourceNode>();
 
-    for (const startIndex of startIndexes) {
-        distances[startIndex] = 0;
-    }
+	for (const baseIndex of myBaseIndexes) {
+		const baseResources = findResourcesFromBase(baseIndex, resourceType);
 
-    while (queue.length > 0) {
-        const currentIndex = queue.shift()!;
-        const currentCell = cells[currentIndex];
+		for (const resource of baseResources) {
+			const current = resourcesByIndex.get(resource.index);
 
-        for (const neighborIndex of currentCell.neighbors) {
-            if (neighborIndex === -1) continue;
-            if (distances[neighborIndex] !== Infinity) continue;
+			if (
+				current === undefined ||
+				resource.distance < current.distance ||
+				(resource.distance === current.distance && resource.baseIndex < current.baseIndex)
+			) {
+				resourcesByIndex.set(resource.index, resource);
+			}
+		}
+	}
 
-            distances[neighborIndex] = distances[currentIndex] + 1;
-            queue.push(neighborIndex);
-        }
-    }
-
-    return distances;
+	return [...resourcesByIndex.values()].sort((a, b) => {
+		if (a.distance !== b.distance) return a.distance - b.distance;
+		return b.amount - a.amount;
+	});
 };
 
-const myDistances = getDistancesFromCells(cells, myBaseIndexes);
-const oppDistances = getDistancesFromCells(cells, oppBaseIndexes);
-const initialEggAmount = cells.reduce((total, cell) => {
-    return cell.type === 1 ? total + cell.resources : total;
-}, 0);
+const getAdditionalPathCost = (path: number[], committedPathIndexes: Set<number>): number => {
+	let cost = 0;
 
-// ==========================================
-// Path analysis
-// ==========================================
+	for (const pathIndex of path) {
+		if (!committedPathIndexes.has(pathIndex)) {
+			cost++;
+		}
+	}
 
-const getPathResourceCounts = (
-    resource: ResourceNode,
-    cells: Cell[]
-): { eggs: number; crystals: number } => {
-    let eggs = 0;
-    let crystals = 0;
-
-    for (const index of resource.path) {
-        const cell = cells[index];
-
-        if (cell.resources <= 0) continue;
-
-        if (cell.type === 1) eggs++;
-        if (cell.type === 2) crystals++;
-    }
-
-    return { eggs, crystals };
+	return cost;
 };
 
-const getPathResourceValue = (
-    resource: ResourceNode,
-    cells: Cell[]
-): number => {
-    let value = 0;
-
-    for (const index of resource.path) {
-        const cell = cells[index];
-
-        if (cell.resources <= 0) continue;
-
-        if (cell.type === 1) value += 12;
-        if (cell.type === 2) value += 4;
-    }
-
-    return value;
+const getEggBeaconStrength = (egg: ResourceNode): number => {
+	if (egg.distance === 1) return 4;
+	if (egg.distance === 2) return 3;
+	if (egg.distance === 3) return 2;
+	return 1;
 };
-
-const getContestBonus = (resource: ResourceNode): number => {
-    const myDistance = myDistances[resource.index];
-    const oppDistance = oppDistances[resource.index];
-
-    if (!Number.isFinite(myDistance) || !Number.isFinite(oppDistance)) {
-        return 0;
-    }
-
-    const distanceGap = myDistance - oppDistance;
-    const isContested = Math.abs(distanceGap) <= 2;
-    const isSmallSteal = distanceGap > 0 && distanceGap <= 3;
-    const distanceRaceBonus = Math.max(0, 4 - Math.abs(myDistance - oppDistance)) * 150;
-
-    if (resource.type === 1) {
-        return (
-            (isContested ? 5000 : 0) +
-            (isSmallSteal ? 800 : 0) +
-            distanceRaceBonus
-        );
-    }
-
-    if (resource.type === 2) {
-        return (
-            (isContested ? 1800 : 0) +
-            (isSmallSteal ? 400 : 0) +
-            distanceRaceBonus
-        );
-    }
-
-    return 0;
-};
-
-const getAdjacentResourcesOnPath = (
-    resource: ResourceNode,
-    cells: Cell[]
-): ResourceNode[] => {
-    const found = new Map<number, ResourceNode>();
-
-    for (let pathPosition = 0; pathPosition < resource.path.length; pathPosition++) {
-        const pathIndex = resource.path[pathPosition];
-        const cell = cells[pathIndex];
-
-        for (const neighborIndex of cell.neighbors) {
-            if (neighborIndex === -1) continue;
-            if (neighborIndex === resource.index) continue;
-
-            const neighbor = cells[neighborIndex];
-
-            if (neighbor.resources <= 0) continue;
-            if (neighbor.type !== 1 && neighbor.type !== 2) continue;
-
-            found.set(neighborIndex, {
-                type: neighbor.type,
-                index: neighborIndex,
-                distance: pathPosition + 1,
-                amount: neighbor.resources,
-                path: [...resource.path.slice(0, pathPosition + 1), neighborIndex]
-            });
-        }
-    }
-
-    return [...found.values()];
-};
-
-const getCorridorResourceIndexes = (
-    resource: ResourceNode,
-    cells: Cell[]
-): Set<number> => {
-    const resourceIndexes = new Set<number>();
-
-    for (const pathIndex of resource.path) {
-        const cell = cells[pathIndex];
-
-        if (cell.resources <= 0) continue;
-        if (cell.type !== 1 && cell.type !== 2) continue;
-
-        resourceIndexes.add(pathIndex);
-    }
-
-    for (const adjacentResource of getAdjacentResourcesOnPath(resource, cells)) {
-        resourceIndexes.add(adjacentResource.index);
-    }
-
-    return resourceIndexes;
-};
-
-const getCorridorRemainingResourceAmount = (
-    resource: ResourceNode,
-    cells: Cell[]
-): number => {
-    let amount = 0;
-
-    for (const resourceIndex of getCorridorResourceIndexes(resource, cells)) {
-        amount += cells[resourceIndex].resources;
-    }
-
-    return amount;
-};
-
-const getPathBase = (resource: ResourceNode): number => {
-    return resource.path[0];
-};
-
-const getResourcesForBase = (
-    resources: ResourceNode[],
-    baseIndex: number
-): ResourceNode[] => {
-    return resources.filter(resource => getPathBase(resource) === baseIndex);
-};
-
-// ==========================================
-// Scoring
-// ==========================================
-
-const getEggPriority = (
-    egg: ResourceNode,
-    cells: Cell[]
-): number => {
-    const adjacentResources = getAdjacentResourcesOnPath(egg, cells);
-
-    let score = 0;
-
-    // Distance dominates. Fast ants matter more than far egg quantity.
-    score -= egg.distance * 1000;
-    score += egg.amount * 20;
-    score += getContestBonus(egg);
-
-    score += adjacentResources.filter(r => r.type === 1).length * 100;
-    score += adjacentResources.filter(r => r.type === 2).length * 30;
-
-    return score;
-};
-
-const sortEggsByFastAcquisition = (
-    eggs: ResourceNode[],
-    cells: Cell[]
-): ResourceNode[] => {
-    return eggs.sort((a, b) => {
-        const priorityA = getEggPriority(a, cells);
-        const priorityB = getEggPriority(b, cells);
-
-        if (priorityA !== priorityB) {
-            return priorityB - priorityA;
-        }
-
-        return a.distance - b.distance;
-    });
-};
-
-const getPriority = (
-    resource: ResourceNode,
-    cells: Cell[]
-): number => {
-    const { eggs, crystals } = getPathResourceCounts(resource, cells);
-    const adjacentResources = getAdjacentResourcesOnPath(resource, cells);
-    const pathResourceValue = getPathResourceValue(resource, cells);
-
-    let score = 0;
-
-    if (resource.type === 1) {
-        score += 1000;
-        score += resource.amount * 20;
-
-        score += eggs * 250;
-        score += crystals * 60;
-
-        score += adjacentResources.filter(r => r.type === 1).length * 80;
-        score += adjacentResources.filter(r => r.type === 2).length * 30;
-
-        if (eggs >= 2) score += 1000;
-    }
-
-    if (resource.type === 2) {
-        score += 100;
-        score += resource.amount * 10;
-
-        score += eggs * 150;
-        score += crystals * 120;
-
-        score += adjacentResources.filter(r => r.type === 1).length * 60;
-        score += adjacentResources.filter(r => r.type === 2).length * 80;
-    }
-
-    score += pathResourceValue * 8;
-    score += getContestBonus(resource);
-    score -= resource.distance * 80;
-
-    return score;
-};
-
-const sortByPathValue = (
-    resources: ResourceNode[],
-    cells: Cell[]
-): ResourceNode[] => {
-    return resources.sort((a, b) => {
-        const priorityA = getPriority(a, cells);
-        const priorityB = getPriority(b, cells);
-
-        if (priorityA !== priorityB) {
-            return priorityB - priorityA;
-        }
-
-        return a.distance - b.distance;
-    });
-};
-
-// ==========================================
-// Reachability
-// ==========================================
-
-const antsCanReachEconomyTarget = (
-    target: ResourceNode,
-    myTotalAnts: number
-): boolean => {
-    const maxEconomyDistance = Math.max(3, Math.floor(myTotalAnts / 4));
-
-    return target.distance <= maxEconomyDistance;
-};
-
-const canProjectForce = (
-    target: ResourceNode | undefined,
-    myTotalAnts: number
-): boolean => {
-    if (!target) return false;
-
-    const requiredStrikeForce = target.distance * 3;
-
-    return myTotalAnts >= requiredStrikeForce;
-};
-
-// ==========================================
-// Target helpers
-// ==========================================
-
-const getLineStrength = (
-    target: ResourceNode,
-    pressureMode: boolean,
-    killMode: boolean
-): number => {
-    if (killMode) {
-        return target.type === 2 ? 6 : 1;
-    }
-
-    if (pressureMode) {
-        return target.type === 2 ? 4 : 2;
-    }
-
-    return target.type === 1 ? 4 : 2;
-};
-
-const cleanDepletedTargets = (
-    activeResourcePaths: Map<number, ResourceNode>,
-    cells: Cell[]
-): void => {
-    for (const [targetIndex, target] of [...activeResourcePaths]) {
-        if (getCorridorRemainingResourceAmount(target, cells) <= 0) {
-            activeResourcePaths.delete(targetIndex);
-        }
-    }
-};
-
-// ==========================================
-// Game state memory
-// ==========================================
-
-let previousOppTotalAnts = 0;
-let stagnantEnemyTurns = 0;
-let initialMyTotalAnts: number | undefined;
-let sweepMode = false;
-
-// ==========================================
-// Game loop
-// ==========================================
 
 while (true) {
-    let myTotalAnts = 0;
-    let oppTotalAnts = 0;
+	let myTotalAnts = 0;
+	turn++;
+	for (let i = 0; i < numberOfCells; i++) {
+		const inputs = readline().split(' ').map(Number);
 
-    // ------------------------------
-    // Read dynamic state
-    // ------------------------------
+		cells[i].resources = inputs[0];
+		cells[i].myAnts = inputs[1];
+		cells[i].oppAnts = inputs[2];
 
-    for (let i = 0; i < numberOfCells; i++) {
-        const inputs = readline().split(' ').map(Number);
+		myTotalAnts += cells[i].myAnts;
+	}
 
-        cells[i].resources = inputs[0];
-        cells[i].myAnts = inputs[1];
-        cells[i].oppAnts = inputs[2];
+	const beaconStrengths = new Map<number, number>();
+	const addBeacon = (cellIndex: number, strength: number): void => {
+		const currentStrength = beaconStrengths.get(cellIndex) ?? 0;
+		beaconStrengths.set(cellIndex, Math.max(currentStrength, strength));
+		stickyBeaconIndexes.add(cellIndex);
+	};
 
-        myTotalAnts += cells[i].myAnts;
-        oppTotalAnts += cells[i].oppAnts;
-    }
+	const addPath = (path: number[], strength: number): void => {
+		for (const pathIndex of path) {
+			addBeacon(pathIndex, strength);
+		}
+	};
 
-    if (initialMyTotalAnts === undefined) {
-        initialMyTotalAnts = myTotalAnts;
-    }
+	const eggs = findResourcesFromClosestBases(EGG);
+	const crystals = findResourcesFromClosestBases(CRYSTAL);
+	const urgentEggs = eggs.filter(egg => egg.distance <= URGENT_EGG_DISTANCE);
+	const committedPathIndexes = new Set<number>();
+	let availableAnts = myTotalAnts;
+	const committedTargetLogs: string[] = [];
+	const skippedTargetLogs: string[] = [];
+	const phase = urgentEggs.length > 0 ? 'EGG' : 'MINERAL';
 
-    // ------------------------------
-    // Discover resources from base
-    // ------------------------------
+	const tryCommitPath = (resource: ResourceNode, strength: number): boolean => {
+		const additionalCost = getAdditionalPathCost(resource.path, committedPathIndexes);
 
-    const eggs = findResourcesByDistanceFromBases(cells, myBaseIndexes, 1);
-    const crystals = findResourcesByDistanceFromBases(cells, myBaseIndexes, 2);
+		if (additionalCost > availableAnts) {
+			skippedTargetLogs.push(
+				`${resource.type === EGG ? 'egg' : 'crystal'}:${resource.index}/d${resource.distance}/a${resource.amount}/cost${additionalCost}/left${availableAnts}`
+			);
+			return false;
+		}
 
-    const reachableEggs = eggs.filter(resource =>
-        antsCanReachEconomyTarget(resource, myTotalAnts)
-    );
+		availableAnts -= additionalCost;
 
-    const reachableCrystals = crystals.filter(resource =>
-        antsCanReachEconomyTarget(resource, myTotalAnts)
-    );
+		for (const pathIndex of resource.path) {
+			committedPathIndexes.add(pathIndex);
+		}
 
-    // ------------------------------
-    // Opponent economy tracking
-    // ------------------------------
+		addPath(resource.path, strength);
+		committedTargetLogs.push(
+			`${resource.type === EGG ? 'egg' : 'crystal'}:${resource.index}/d${resource.distance}/a${resource.amount}/cost${additionalCost}/s${strength}`
+		);
+		return true;
+	};
 
-    if (oppTotalAnts <= previousOppTotalAnts) {
-        stagnantEnemyTurns++;
-    } else {
-        stagnantEnemyTurns = 0;
-    }
+	if (urgentEggs.length > 0) {
+		for (const egg of eggs) {
+			tryCommitPath(egg, getEggBeaconStrength(egg));
+		}
+	} else {
+		const remainingCrystals = [...crystals];
+		const mineralTargetLimit = Math.max(1, Math.floor(myTotalAnts / MINERAL_TARGET_ANT_DIVISOR));
+		let committedMineralTargets = 0;
 
-    previousOppTotalAnts = oppTotalAnts;
+		while (remainingCrystals.length > 0 && committedMineralTargets < mineralTargetLimit) {
+			remainingCrystals.sort((a, b) => {
+				const additionalCostA = getAdditionalPathCost(a.path, committedPathIndexes);
+				const additionalCostB = getAdditionalPathCost(b.path, committedPathIndexes);
 
-    // ------------------------------
-    // Compute best targets
-    // ------------------------------
+				if (additionalCostA !== additionalCostB) return additionalCostA - additionalCostB;
+				if (a.amount !== b.amount) return b.amount - a.amount;
+				return a.distance - b.distance;
+			});
 
-    const remainingEggAmount = eggs.reduce((total, egg) => total + egg.amount, 0);
+			const crystal = remainingCrystals.shift()!;
 
-    const bestCrystal = sortByPathValue(reachableCrystals, cells)[0];
+			if (tryCommitPath(crystal, MINERAL_BEACON_STRENGTH)) {
+				committedMineralTargets++;
+			}
+		}
+	}
 
-    // ------------------------------
-    // Strategy modes
-    // ------------------------------
+	for (const stickyIndex of [...stickyBeaconIndexes]) {
+		if (!committedPathIndexes.has(stickyIndex)) {
+			stickyBeaconIndexes.delete(stickyIndex);
+			continue;
+		}
 
-    const openingAntBaseline = Math.max(1, initialMyTotalAnts ?? myTotalAnts);
-    const hasBigAntLead = myTotalAnts >= oppTotalAnts * 2;
-    const enemyNotGrowing = stagnantEnemyTurns >= 3;
-    const hasEnoughEconomy = myTotalAnts >= openingAntBaseline * 3 || eggs.length === 0;
-    const canReachCrystalWithForce = canProjectForce(bestCrystal, myTotalAnts);
+		addBeacon(stickyIndex, 1);
+	}
 
-    const pressureMode =
-        hasEnoughEconomy &&
-        enemyNotGrowing &&
-        myTotalAnts > oppTotalAnts &&
-        canReachCrystalWithForce;
+	console.error(`t=${turn} phase=${phase} ants=${myTotalAnts} left=${availableAnts} nodes=${committedPathIndexes.size}`);
+	console.error(`commit ${committedTargetLogs.join(' | ') || 'none'}`);
+	console.error(`skip ${skippedTargetLogs.slice(0, 8).join(' | ') || 'none'}`);
+	const actions = [...beaconStrengths].map(([cellIndex, strength]) =>
+		`BEACON ${cellIndex} ${strength}`
+	);
 
-    const killMode =
-        hasEnoughEconomy &&
-        enemyNotGrowing &&
-        hasBigAntLead &&
-        canReachCrystalWithForce;
-
-    const eggEconomyMostlyResolved =
-        initialEggAmount === 0 ||
-        remainingEggAmount <= initialEggAmount * 0.35;
-    const hasScaledArmy = myTotalAnts >= openingAntBaseline * 4;
-    const hasCrushingAntLead =
-        oppTotalAnts > 0
-            ? myTotalAnts >= oppTotalAnts * 1.75
-            : myTotalAnts >= openingAntBaseline * 3;
-    const simpleCrystalSweep =
-        crystals.length > 0 &&
-        (
-            eggs.length === 0 ||
-            eggEconomyMostlyResolved ||
-            hasScaledArmy ||
-            hasCrushingAntLead ||
-            killMode
-        );
-
-    const simpleEggPhase = eggs.length > 0 && !simpleCrystalSweep;
-
-    // ------------------------------
-    // Memory cleanup
-    // ------------------------------
-
-    cleanDepletedTargets(activeResourcePaths, cells);
-
-    // ------------------------------
-    // Target activation
-    // ------------------------------
-
-    sweepMode = simpleCrystalSweep;
-
-    if (sweepMode) {
-        activeResourcePaths.clear();
-    } else if (simpleEggPhase) {
-        for (const [targetIndex, target] of [...activeResourcePaths]) {
-            if (target.type !== 1) {
-                activeResourcePaths.delete(targetIndex);
-            }
-        }
-
-        const eggTargetLimit = myTotalAnts >= openingAntBaseline * 2 ? 2 : 1;
-
-        for (const baseIndex of myBaseIndexes) {
-            const baseReachableEggs = getResourcesForBase(reachableEggs, baseIndex);
-            const nearBaseEggTargets = sortEggsByFastAcquisition(
-                baseReachableEggs.filter(egg => egg.distance <= 2),
-                cells
-            );
-
-            for (const nearBaseEggTarget of nearBaseEggTargets) {
-                activeResourcePaths.set(nearBaseEggTarget.index, nearBaseEggTarget);
-            }
-
-            const eggTargets = sortEggsByFastAcquisition([...baseReachableEggs], cells)
-                .slice(0, eggTargetLimit);
-
-            for (const eggTarget of eggTargets) {
-                activeResourcePaths.set(eggTarget.index, eggTarget);
-            }
-        }
-    }
-
-
-    // ------------------------------
-    // Command generation
-    // ------------------------------
-
-    const beaconStrengths = new Map<number, number>();
-
-    const addBeacon = (cellIndex: number, strength: number): void => {
-        const existingStrength = beaconStrengths.get(cellIndex) ?? 0;
-        beaconStrengths.set(cellIndex, Math.max(existingStrength, strength));
-    };
-
-    if (sweepMode) {
-        for (const baseIndex of myBaseIndexes) {
-            if (cells[baseIndex].myAnts <= 0) continue;
-
-            const sweepTargets = sortByPathValue(
-                getResourcesForBase(crystals, baseIndex),
-                cells
-            );
-
-            for (const target of sweepTargets) {
-                for (const pathIndex of target.path) {
-                    addBeacon(pathIndex, 2);
-                }
-            }
-        }
-    } else {
-        for (const [targetIndex, target] of [...activeResourcePaths]) {
-            if (getCorridorRemainingResourceAmount(target, cells) <= 0) {
-                activeResourcePaths.delete(targetIndex);
-                continue;
-            }
-
-            const strength = getLineStrength(target, pressureMode, killMode);
-
-            for (const pathIndex of target.path) {
-                addBeacon(pathIndex, strength);
-            }
-
-            const targetCanSupportSideTaps =
-                cells[target.index].myAnts >= 4 ||
-                cells[target.index].resources <= 0;
-
-            if (targetCanSupportSideTaps) {
-                const adjacentResources = getAdjacentResourcesOnPath(target, cells);
-
-                for (const adjacentResource of adjacentResources) {
-                    addBeacon(adjacentResource.index, 1);
-                }
-            }
-        }
-    }
-
-    const actions = [...beaconStrengths].map(([cellIndex, strength]) =>
-        `BEACON ${cellIndex} ${strength}`
-    );
-
-    console.log(actions.length > 0 ? actions.join(';') : 'WAIT');
+	console.log(actions.length > 0 ? actions.join(';') : 'WAIT');
 }
