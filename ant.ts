@@ -529,8 +529,10 @@ while (true) {
 	};
 
 	const runScarceCrystalBank = (): void => {
+		commitCrystals(crystals, 1);
+		commitEggs(urgentEggs, 2);
+		commitStrategicEggs(1, 8);
 		commitCrystals(crystals, mineralTargetLimit);
-		commitStrategicEggs(1, 6);
 	};
 
 	const runEggRush = (): void => {
