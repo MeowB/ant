@@ -281,6 +281,7 @@ const chooseStrategyMode = (profile: MapProfile): StrategyMode => {
 		(bestCloseCrystal !== undefined &&
 			bestCloseCrystal.distance <= 2 &&
 			bestCloseCrystal.amount >= profile.crystalGoal * 0.20);
+	const hasBankableCrystalWin = profile.reachableCrystalAmount >= profile.crystalGoal;
 	const hasStrongNearbyEggs = profile.nearEggAmount >= 20;
 	const hasEggEconomyMap =
 		profile.eggs.some(egg => egg.distance <= 2) &&
@@ -291,6 +292,10 @@ const chooseStrategyMode = (profile: MapProfile): StrategyMode => {
 		profile.closeCrystalAmount < profile.crystalGoal * 0.45;
 
 	if (hasImmediateCrystalWin && profile.nearEggAmount < 12) {
+		return 'CRYSTAL_RUSH';
+	}
+
+	if (hasBankableCrystalWin) {
 		return 'CRYSTAL_RUSH';
 	}
 
