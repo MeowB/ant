@@ -1095,3 +1095,201 @@ Focus:
 Rule:
 
 Tune one strategy at a time. Do not fix every bad replay with one global formula.
+
+### Session 6 - Bronze to Silver, Protocol Fix and Two-Base Stability
+
+This session was the successful Silver promotion push.
+
+The project was intentionally cleaned down to the useful working files:
+
+* `ant.ts` - active bot under tuning.
+* `ant.md` - learning log and strategy notes.
+* `silver-bot.ts` - saved Silver League baseline. Do not overwrite it during experiments.
+
+The old artifact files and separate strategy notes were removed because the bot is now simple enough to reason about directly in `ant.ts`.
+
+---
+
+#### Strategic Reset
+
+Several complex approaches were tested and abandoned:
+
+* smell-blood aggression,
+* route-farming with many resource corridors,
+* heavy tracking memory,
+* broad map swipe without enough egg discipline.
+
+The working strategy became simpler:
+
+```
+Egg rush
+  -> build enough ant economy from good nearby eggs
+
+Swipe
+  -> keep eggs alive when useful
+  -> pressure crystals broadly enough to race the boss
+```
+
+The important lesson was that clever global scoring was less valuable than reliable early economy and strong pipes.
+
+---
+
+#### Current Bot Shape
+
+The current bot is an egg-rush into swipe planner.
+
+Runtime state:
+
+* `EGG_RUSH`
+* `SWIPE`
+
+Important behaviors:
+
+* Prioritize close, high-value egg nests.
+* Do not switch to crystals too early.
+* During swipe, keep taking eggs instead of abandoning economy completely.
+* Use `LINE` routes for simple, robust command output.
+* Recompute every turn using live resource amounts, so depleted nodes naturally fall away.
+* Avoid enemy-mined crystals when the opponent will clear them before we arrive.
+* Reinforce contested paths when opponent ants threaten the chain.
+
+---
+
+#### Silver Protocol Fix
+
+Silver changed the turn input protocol.
+
+Each turn now starts with:
+
+```
+myScore oppScore
+```
+
+Then the bot reads one line per cell:
+
+```
+resources myAnts oppAnts
+```
+
+The bug was subtle because the game still looked partially readable, but all cell parsing became shifted when the score line was not consumed.
+
+Fix:
+
+* Read the score line before the cell loop.
+* Use official score values instead of reconstructing score from crystal drops.
+* Keep resource-drop tracking only for eggs/debugging.
+
+This fixed the strange `NaN` opponent ant count and premature swipe transitions.
+
+---
+
+#### Attack Chains
+
+Silver also introduced attack chains.
+
+Contested cells can break harvest chains if the opponent has the stronger attack chain through that cell.
+
+Current response is simple:
+
+* If a planned path has stronger opponent presence, reinforce useful close routes.
+* Prefer reinforcing eggs and valuable nearby crystals.
+* Skip risky weak pressure on paths that are not worth contesting.
+
+This is not a full attack-chain solver yet, but it prevents some obvious broken-chain losses.
+
+---
+
+#### Egg Rush Lessons
+
+Several failures came from leaving egg rush too early or spreading it too thin.
+
+Rules that survived:
+
+* Egg rush should focus eggs, not crystals.
+* Crystals during egg rush are only acceptable when the crystal win condition is small compared to current ant count.
+* Swipe should not give up on live eggs.
+* A close rich egg nest should be saturated before spreading to far eggs.
+
+The boss often wins by fully exploiting a nearby nest before moving on. Matching that behavior was more important than fancy route diversity.
+
+---
+
+#### Two-Base Problem
+
+On two-base maps, one base could abandon all existence.
+
+Cause:
+
+* Global resource selection picked the best base for each target.
+* If most attractive routes belonged to one side, beacon weights pulled ants from the other base across the map.
+
+Fix:
+
+* Add per-base resource discovery.
+* Let each base reserve a local egg route in egg rush.
+* Let each base reserve a local egg or crystal route in swipe.
+* Add a weak base anchor beacon when a base has no committed route.
+
+Goal:
+
+```
+Each base should keep farming its own side unless there is a strong reason to merge fronts.
+```
+
+This keeps local ant economies alive and reduces pointless cross-map migration.
+
+---
+
+#### Current Debug Signals
+
+Per turn, stderr reports:
+
+* turn,
+* phase,
+* my ants / opponent ants,
+* official score,
+* estimated egg harvest,
+* budget,
+* committed path cost,
+* committed route logs.
+
+Useful log labels:
+
+* `priorityEgg`
+* `localEgg`
+* `egg`
+* `swipeEgg`
+* `extraEgg`
+* `localCrystal`
+* `crystal`
+* `cut`
+* `anchor`
+
+For two-base maps, look for `localEgg`, `localCrystal`, or `anchor` on both base indices.
+
+---
+
+#### Current Repository Rule
+
+`silver-bot.ts` is the saved Silver League baseline.
+
+Do not touch it during active experiments.
+
+Use `ant.ts` for Gold-push tuning.
+
+---
+
+### Next Session
+
+Purpose:
+
+Push from Silver toward Gold.
+
+Focus:
+
+1. Test two-base anchoring on several maps.
+2. Confirm that a base no longer fully drains into the other side.
+3. Watch whether `anchor` strength 1 is enough or too expensive.
+4. Tune close rich egg saturation.
+5. Improve attack-chain handling only after replay evidence.
+6. Avoid another broad rewrite unless logs prove the current simple planner is capped.
