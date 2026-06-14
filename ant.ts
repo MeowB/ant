@@ -24,13 +24,13 @@ interface ResourceNode {
 	baseIndex: number;
 }
 
-type Phase = 'EGG_RUSH' | 'SWIPE';
+type Phase = 'EGG_RUSH' | 'SWIPE_EGGS' | 'SWIPE_CRYSTALS';
 
 const EGG = 1;
 const CRYSTAL = 2;
 
 const ANT_BUDGET_RATIO = 0.9;
-const EGG_RUSH_ANT_GOAL = 50;
+const MIN_EGG_RUSH_ANT_GOAL = 50;
 const EGG_RUSH_MAX_TARGETS = 3;
 const EGG_RUSH_MAX_DISTANCE = 6;
 const SWIPE_LOW_ANT_CRYSTAL_TARGETS = 3;
@@ -54,7 +54,7 @@ for (let i = 0; i < cellCount; i++) {
 
 parseInt(readline());
 const myBases = readline().split(' ').map(Number);
-readline();
+const oppBases = readline().split(' ').map(Number);
 
 let turn = 0;
 let phase: Phase = 'EGG_RUSH';
@@ -66,13 +66,45 @@ const initialEggTotal = cells
 	.filter(cell => cell.type === EGG)
 	.reduce((sum, cell) => sum + cell.resources, 0);
 
+const eggRushAntGoal = Math.max(
+	MIN_EGG_RUSH_ANT_GOAL,
+	Math.floor(initialEggTotal * 0.35)
+);
+
 const initialCrystalTotal = cells
 	.filter(cell => cell.type === CRYSTAL)
 	.reduce((sum, cell) => sum + cell.resources, 0);
 
 const crystalGoal = Math.floor(initialCrystalTotal / 2) + 1;
 const previousResources = cells.map(cell => cell.resources);
-let eggRushTargets: number[] = []
+
+const getDistancesFromBases = (baseIndexes: number[]): number[] => {
+	const distances = Array(cellCount).fill(Number.MAX_SAFE_INTEGER);
+	const queue: number[] = [];
+
+	for (const baseIndex of baseIndexes) {
+		distances[baseIndex] = 0;
+		queue.push(baseIndex);
+	}
+
+	while (queue.length > 0) {
+		const index = queue.shift()!;
+		const cell = cells[index];
+
+		for (const neighbor of cell.neighbors) {
+			if (neighbor === -1) continue;
+			if (distances[neighbor] <= distances[index] + 1) continue;
+
+			distances[neighbor] = distances[index] + 1;
+			queue.push(neighbor);
+		}
+	}
+
+	return distances;
+};
+
+const myBaseDistances = getDistancesFromBases(myBases);
+const oppBaseDistances = getDistancesFromBases(oppBases);
 
 const findResourcesFromBase = (
 	resourceType: number,
@@ -175,6 +207,57 @@ const getPathCost = (
 	return cost;
 };
 
+const getBestNetworkPath = (
+	resource: ResourceNode,
+	strengths: Map<number, number>
+): number[] => {
+	const starts = strengths.size > 0
+		? [...strengths.keys()]
+		: myBases;
+	const visited = new Set<number>();
+	const queue: { index: number; path: number[] }[] = starts.map(index => ({
+		index,
+		path: [index]
+	}));
+
+	for (const start of starts) {
+		visited.add(start);
+	}
+
+	while (queue.length > 0) {
+		const current = queue.shift()!;
+
+		if (current.index === resource.index) {
+			return current.path;
+		}
+
+		for (const neighbor of cells[current.index].neighbors) {
+			if (neighbor === -1 || visited.has(neighbor)) continue;
+
+			visited.add(neighbor);
+			queue.push({
+				index: neighbor,
+				path: [...current.path, neighbor]
+			});
+		}
+	}
+
+	return resource.path;
+};
+
+const isOurSide = (resource: ResourceNode): boolean =>
+	myBaseDistances[resource.index] <= oppBaseDistances[resource.index];
+
+const isNeutralSide = (resource: ResourceNode): boolean =>
+	myBaseDistances[resource.index] === oppBaseDistances[resource.index];
+
+const isCheapExtension = (
+	resource: ResourceNode,
+	strengths: Map<number, number>,
+	maxCost: number
+): boolean =>
+	getPathCost(getBestNetworkPath(resource, strengths), 1, strengths) <= maxCost;
+
 const addPath = (
 	path: number[],
 	strength: number,
@@ -245,8 +328,8 @@ const shouldSwipe = (
 		egg.amount >= 20
 	);
 
-	if (phase === 'SWIPE') return true;
-	if (myAnts >= EGG_RUSH_ANT_GOAL && (myAnts >= oppAnts + 10 || !richReachableEggs)) return true;
+	if (phase !== 'EGG_RUSH') return true;
+	if (myAnts >= eggRushAntGoal && (myAnts >= oppAnts + 10 || !richReachableEggs)) return true;
 	if (turn >= 10 && oppScore > myScore + 20) return true;
 
 
@@ -273,18 +356,23 @@ const tryCommit = (
 
 	if (commitStrength === 0) return false;
 
-	const cost = getPathCost(resource.path, commitStrength, strengths);
+	const path = getBestNetworkPath(resource, strengths);
+	const cost = getPathCost(path, commitStrength, strengths);
 
 	if (getPlannedCost(strengths) + cost > antBudget) return false;
 	if (cost === 0) return false;
 
-	addPath(resource.path, commitStrength, strengths);
+	const beaconPath = path.filter(index => (strengths.get(index) ?? 0) < commitStrength);
+
+	addPath(path, commitStrength, strengths);
 	if (resource.type === EGG && resource.distance >= 3) {
-		for (const index of resource.path) {
+		for (const index of beaconPath) {
 			actions.push(`BEACON ${index} ${commitStrength}`)
 		}
 	} else {
-		actions.push(`LINE ${resource.baseIndex} ${resource.index} ${commitStrength}`)
+		for (const index of beaconPath) {
+			actions.push(`BEACON ${index} ${commitStrength}`)
+		}
 	}
 	logs.push(`${label}:${resource.index}/t${resource.type}/d${resource.distance}/a${resource.amount}/s${commitStrength}/cost${cost}`);
 	return true;
@@ -306,149 +394,58 @@ const keepBasesAnchored = (
 	}
 };
 
-const getEggScore = (egg: ResourceNode): number =>
-	egg.amount * (egg.distance <= 2 ? 2 : 1) / Math.max(1, egg.distance);
-
-const getEggPlanScore = (
-	egg: ResourceNode,
-	strengths: Map<number, number>
-): number => {
-	const value = egg.amount * (egg.distance <= 2 ? 2 : 1)
-	const cost = getPathCost(egg.path, getEggStrength(egg), strengths)
-
-	return value / Math.max(1, cost)
-}
-
 const getRouteScore = (
 	resource: ResourceNode,
 	strengths: Map<number, number>
 ): number =>
-	resource.amount / Math.max(1, resource.distance + getPathCost(resource.path, 1, strengths));
+	resource.amount / Math.max(1, resource.distance + getPathCost(getBestNetworkPath(resource, strengths), 1, strengths));
 
-const commitEggRush = (
+const getSwipeEggCandidates = (
 	eggs: ResourceNode[],
-	eggsByBase: Map<number, ResourceNode[]>,
-	crystals: ResourceNode[],
-	strengths: Map<number, number>,
-	antBudget: number,
-	myAnts: number,
-	oppAnts: number,
-	actions: string[],
-	logs: string[]
-): void => {
-	let committedEggs = 0;
-	const committedEggThisTurn: number[] = []
-	const isBehind = myAnts < oppAnts
-
-	const eggCandidates = eggs
-		.filter(egg => egg.distance <= EGG_RUSH_MAX_DISTANCE)
+	strengths: Map<number, number>
+): ResourceNode[] =>
+	eggs
+		.filter(egg =>
+			isOurSide(egg)
+				? egg.distance <= EGG_RUSH_MAX_DISTANCE
+				: isCheapExtension(egg, strengths, 3)
+		)
 		.sort((a, b) => {
-			const scoreA = getEggScore(a);
-			const scoreB = getEggScore(b);
+			const scoreA = getRouteScore(a, strengths);
+			const scoreB = getRouteScore(b, strengths);
 
 			if (scoreA !== scoreB) return scoreB - scoreA;
 			return a.distance - b.distance;
 		});
-	const priorityEgg = eggCandidates.find(egg =>
-		egg.distance <= 2 &&
-		egg.amount >= 20
-	);
 
-	for (const targetIndex of eggRushTargets) {
-		if (committedEggs >= EGG_RUSH_MAX_TARGETS) break
+const commitEggRush = (
+	eggs: ResourceNode[],
+	strengths: Map<number, number>,
+	antBudget: number,
+	actions: string[],
+	logs: string[]
+): void => {
+	let committedEggs = 0;
 
-		const stickyEgg = eggCandidates.find(egg => egg.index === targetIndex)
-
-		if (!stickyEgg) continue
-		if (isBehind && stickyEgg.distance > 3) continue
-		if (isBehind && hasOpponentPressureOnPath(stickyEgg.path) && stickyEgg.distance > 2) continue
-		if (tryCommit(stickyEgg, getEggStrength(stickyEgg), strengths, antBudget, actions, logs, 'stickyEggs')) {
-			committedEggs++
-			committedEggThisTurn.push(stickyEgg.index)
-		}
-	}
-
-	if (priorityEgg &&
-		!committedEggThisTurn.includes(priorityEgg.index) &&
-		tryCommit(priorityEgg, getEggStrength(priorityEgg), strengths, antBudget, actions, logs, 'priorityEgg')) {
-		committedEggs++;
-		committedEggThisTurn.push(priorityEgg.index)
-	}
-
-	for (const baseIndex of myBases) {
-		if ((strengths.get(baseIndex) ?? 0) > 0) continue;
-		if (committedEggs >= EGG_RUSH_MAX_TARGETS) break;
-
-		const localEgg = (eggsByBase.get(baseIndex) ?? [])
-			.filter(egg => egg.distance <= (isBehind ? 3 : EGG_RUSH_MAX_DISTANCE))
-			.filter(egg => !isBehind || egg.distance <= 2 || !hasOpponentPressureOnPath(egg.path))
-			.sort((a, b) => {
-				if (isBehind && a.distance !== b.distance) return a.distance - b.distance
-
-				const scoreA = getEggScore(a);
-				const scoreB = getEggScore(b);
-
-				if (scoreA !== scoreB) return scoreB - scoreA;
-				return a.distance - b.distance;
-			})[0];
-
-
-		if (localEgg &&
-			!committedEggThisTurn.includes(localEgg.index) &&
-			tryCommit(localEgg, getEggStrength(localEgg), strengths, antBudget, actions, logs, 'localEgg')) {
-			committedEggs++;
-			committedEggThisTurn.push(localEgg.index)
-		}
-	}
-
-	const eggExtensionCandidates = [...eggCandidates].sort((a, b) => {
-		const scoreA = getEggPlanScore(a, strengths)
-		const scoreB = getEggPlanScore(b, strengths)
-
-		if (scoreA !== scoreB) return scoreB - scoreA
-
-		const costA = getPathCost(a.path, getEggStrength(a), strengths)
-		const costB = getPathCost(a.path, getEggStrength(b), strengths)
-
-		if (costA !== costB) return costA - costB
-		return a.distance - b.distance
-	})
-
-
-	for (const egg of eggExtensionCandidates) {
-		if (committedEggs >= EGG_RUSH_MAX_TARGETS) break;
-		if (egg.index === priorityEgg?.index) continue;
-		if (committedEggThisTurn.includes(egg.index)) continue
-		if (turn <= 3 && egg.distance > 3) continue
-		if (cells[egg.index].oppAnts > 0 && egg.distance > 2) continue
-		if (isBehind && egg.distance > 3) continue
-		if (isBehind && hasOpponentPressureOnPath(egg.path) && egg.distance > 2) continue
-
-		if (tryCommit(egg, getEggStrength(egg), strengths, antBudget, actions, logs, 'egg')) {
-			committedEggs++;
-			committedEggThisTurn.push(egg.index)
-		}
-	}
-
-	const shouldTakeOpeningCrystals = crystalGoal <= myAnts * 3;
-
-	if (!shouldTakeOpeningCrystals) {
-		eggRushTargets = committedEggThisTurn
-		return
-	};
-
-	const closeCrystals = crystals
-		.filter(crystal => crystal.distance <= 3)
-		.filter(crystal => !isEnemyMiningTooFast(crystal, strengths))
+	const eggCandidates = eggs
+		.filter(egg => egg.distance <= EGG_RUSH_MAX_DISTANCE)
+		.filter(isOurSide)
 		.sort((a, b) => {
-			if (a.distance !== b.distance) return a.distance - b.distance;
-			return b.amount - a.amount;
+			if (a.distance !== b.distance) return a.distance - b.distance
+			return a.index - b.index
 		});
 
-	for (const crystal of closeCrystals) {
-		tryCommit(crystal, 1, strengths, antBudget, actions, logs, 'closeCrystal');
+	for (const egg of eggCandidates) {
+		if (committedEggs >= EGG_RUSH_MAX_TARGETS) break;
+
+		const strength = isNeutralSide(egg)
+			? Math.max(2, getEggStrength(egg))
+			: getEggStrength(egg);
+
+		if (tryCommit(egg, strength, strengths, antBudget, actions, logs, 'egg')) {
+			committedEggs++;
+		}
 	}
-	eggRushTargets = committedEggThisTurn
 };
 
 const getOpponentPressure = (resource: ResourceNode): number => {
@@ -503,42 +500,12 @@ const commitSwipe = (
 	actions: string[],
 	logs: string[]
 ): void => {
-	const stillWantEggs = eggs.length > 0;
-	const eggCandidates = eggs
-		.filter(egg =>
-			stillWantEggs &&
-			(egg.distance <= EGG_RUSH_MAX_DISTANCE || getPathCost(egg.path, 1, strengths) <= 3)
-		)
-		.sort((a, b) => {
-			const scoreA = getRouteScore(a, strengths);
-			const scoreB = getRouteScore(b, strengths);
-
-			if (scoreA !== scoreB) return scoreB - scoreA;
-			return a.distance - b.distance;
-		});
+	const isCrystalSwipe = phase === 'SWIPE_CRYSTALS';
 	let committedEggs = 0
 	let committedCrystals = 0
 
 	for (const baseIndex of myBases) {
 		if ((strengths.get(baseIndex) ?? 0) > 0) continue;
-
-		const localEgg = (eggsByBase.get(baseIndex) ?? [])
-			.filter(egg =>
-				stillWantEggs &&
-				(egg.distance <= EGG_RUSH_MAX_DISTANCE || getPathCost(egg.path, 1, strengths) <= 3)
-			)
-			.sort((a, b) => {
-				const scoreA = getRouteScore(a, strengths);
-				const scoreB = getRouteScore(b, strengths);
-
-				if (scoreA !== scoreB) return scoreB - scoreA;
-				return a.distance - b.distance;
-			})[0];
-
-		if (localEgg && tryCommit(localEgg, 1, strengths, antBudget, actions, logs, 'localEgg')) {
-			committedEggs++;
-			continue;
-		}
 
 		const localCrystal = (crystalsByBase.get(baseIndex) ?? [])
 			.filter(crystal => !isEnemyMiningTooFast(crystal, strengths))
@@ -551,8 +518,28 @@ const commitSwipe = (
 				return a.distance - b.distance;
 			})[0];
 
-		if (localCrystal && tryCommit(localCrystal, 1, strengths, antBudget, actions, logs, 'localCrystal')) {
-			committedCrystals++
+		if (isCrystalSwipe) {
+			if (localCrystal && tryCommit(localCrystal, 2, strengths, antBudget, actions, logs, 'localCrystal')) {
+				committedCrystals++
+				continue;
+			}
+
+			const localEgg = getSwipeEggCandidates(eggsByBase.get(baseIndex) ?? [], strengths)[0];
+
+			if (localEgg && tryCommit(localEgg, 1, strengths, antBudget, actions, logs, 'localEgg')) {
+				committedEggs++;
+			}
+		} else {
+			const localEgg = getSwipeEggCandidates(eggsByBase.get(baseIndex) ?? [], strengths)[0];
+
+			if (localEgg && tryCommit(localEgg, 1, strengths, antBudget, actions, logs, 'localEgg')) {
+				committedEggs++;
+				continue;
+			}
+
+			if (localCrystal && tryCommit(localCrystal, 1, strengths, antBudget, actions, logs, 'localCrystal')) {
+				committedCrystals++
+			}
 		}
 	}
 
@@ -561,15 +548,19 @@ const commitSwipe = (
 
 	if (liveBases.length > 1 && !liveBasesHaveRoute) return
 
-	for (const egg of eggCandidates) {
-		if (committedEggs >= 3) break;
+	if (!isCrystalSwipe) {
+		const swipeEggCandidates = getSwipeEggCandidates(eggs, strengths);
 
-		if (tryCommit(egg, 1, strengths, antBudget, actions, logs, 'swipeEgg')) {
-			committedEggs++;
+		for (const egg of swipeEggCandidates) {
+			if (committedEggs >= 3) break;
+
+			if (tryCommit(egg, 1, strengths, antBudget, actions, logs, 'swipeEgg')) {
+				committedEggs++;
+			}
 		}
-	}
 
-	commitCuts(crystals, strengths, antBudget, myAnts, oppAnts, actions, logs);
+		commitCuts(crystals, strengths, antBudget, myAnts, oppAnts, actions, logs);
+	}
 
 	const maxCrystalDistance = myAnts >= 70 ? 12 : 6;
 	const crystalCandidates = crystals
@@ -585,18 +576,37 @@ const commitSwipe = (
 			return a.distance - b.distance;
 		});
 
-	const maxCrystalTargets = myAnts >= 70
+	const maxCrystalTargets = isCrystalSwipe || myAnts >= 70
 		? SWIPE_HIGH_ANT_CRYSTAL_TARGETS
 		: SWIPE_LOW_ANT_CRYSTAL_TARGETS
+	const crystalStrength = isCrystalSwipe ? 2 : 1
 
 	for (const crystal of crystalCandidates) {
 		if (committedCrystals >= maxCrystalTargets) break
-		if (tryCommit(crystal, 1, strengths, antBudget, actions, logs, 'crystal')) {
+		if (tryCommit(crystal, crystalStrength, strengths, antBudget, actions, logs, 'crystal')) {
 			committedCrystals++
 		}
 	}
 
-	for (const egg of eggCandidates) {
+	if (isCrystalSwipe) {
+		commitCuts(crystals, strengths, antBudget, myAnts, oppAnts, actions, logs);
+	}
+
+	if (isCrystalSwipe) {
+		const swipeEggCandidates = getSwipeEggCandidates(eggs, strengths);
+
+		for (const egg of swipeEggCandidates) {
+			if (committedEggs >= 3) break;
+
+			if (tryCommit(egg, 1, strengths, antBudget, actions, logs, 'swipeEgg')) {
+				committedEggs++;
+			}
+		}
+	}
+
+	const extraEggCandidates = getSwipeEggCandidates(eggs, strengths);
+
+	for (const egg of extraEggCandidates) {
 		if (committedEggs >= 6) break;
 
 		if (tryCommit(egg, 1, strengths, antBudget, actions, logs, 'extraEgg')) {
@@ -636,9 +646,13 @@ while (true) {
 	const crystals = findResources(CRYSTAL);
 	const eggsByBase = findResourcesByBase(EGG);
 	const crystalsByBase = findResourcesByBase(CRYSTAL);
+	const remainingCrystalTotal = crystals.reduce((sum, crystal) => sum + crystal.amount, 0);
+	const isCrystalRace = remainingCrystalTotal < initialCrystalTotal / 2;
 
-	if (shouldSwipe(myAnts, oppAnts, eggs)) {
-		phase = 'SWIPE';
+	if (isCrystalRace) {
+		phase = 'SWIPE_CRYSTALS';
+	} else if (shouldSwipe(myAnts, oppAnts, eggs)) {
+		phase = 'SWIPE_EGGS';
 	}
 
 	const strengths = new Map<number, number>();
@@ -647,7 +661,7 @@ while (true) {
 	const antBudget = Math.max(1, Math.floor(myAnts * ANT_BUDGET_RATIO));
 
 	if (phase === 'EGG_RUSH') {
-		commitEggRush(eggs, eggsByBase, crystals, strengths, antBudget, myAnts, oppAnts, actions, logs);
+		commitEggRush(eggs, strengths, antBudget, actions, logs);
 	} else {
 		commitSwipe(eggs, eggsByBase, crystals, crystalsByBase, strengths, antBudget, myAnts, oppAnts, actions, logs);
 	}
@@ -655,7 +669,7 @@ while (true) {
 	keepBasesAnchored(strengths, antBudget, actions, logs);
 
 	console.error(
-		`t=${turn} phase=${phase} ants=${myAnts}/${oppAnts} score=${myScore}-${oppScore}/${crystalGoal} eggs=${harvestedEggs}/${initialEggTotal} budget=${antBudget} cost=${getPlannedCost(strengths)}`
+		`t=${turn} phase=${phase} ants=${myAnts}/${oppAnts}/${eggRushAntGoal} score=${myScore}-${oppScore}/${crystalGoal} eggs=${harvestedEggs}/${initialEggTotal} budget=${antBudget} cost=${getPlannedCost(strengths)}`
 	);
 	console.error(logs.join(' | ') || 'idle');
 
