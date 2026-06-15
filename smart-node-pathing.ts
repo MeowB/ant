@@ -39,6 +39,7 @@ interface NodeRoute {
 	contested: boolean;
 	enemySide: boolean;
 	strength: number;
+	distruptionValue: number;
 }
 
 type Phase = 'EGG_FIRST' | 'CRYSTAL_FIRST';
@@ -260,6 +261,46 @@ const getPathResourceValue = (
 		return sum + cell.resources;
 	}, 0);
 
+const getPathDistruptionValue = (
+	path: number[],
+	target: ResourceNode
+): number => {
+	let value = 0
+	const seen = new Set<number>()
+
+	for (const index of path) {
+		const cell = cells[index]
+
+		if (cell.oppAnts > 0) {
+			value += cell.oppAnts > cell.myAnts ? 6 : 3
+		}
+
+		for (const neighbor of cell.neighbors) {
+			if (neighbor === -1 || seen.has(neighbor)) continue
+			seen.add(neighbor)
+
+			const neighborCell = cells[neighbor]
+			if ((neighborCell.type !== EGG && neighborCell.type !== CRYSTAL) || neighborCell.resources <= 0) {
+				continue
+			}
+
+			const enemyLeaning = oppBaseDistances[neighbor] <= myBaseDistances[neighbor]
+			if (!enemyLeaning) continue
+			if (neighborCell.oppAnts > 0) {
+				value += 4
+			} else {
+				value += 2
+			}
+		}
+
+		if(target.oppBaseDistance <= target.myBaseDistance) {
+			value +=3
+		}
+
+		return value
+	}
+}
+
 const getNodeStrength = (
 	node: ResourceNode,
 	phase: Phase
@@ -286,6 +327,7 @@ const buildNodeRoute = (
 	strengthOverride?: number
 ): NodeRoute | null => {
 	const path = getShortestPathFromStarts(anchorIndexes, target.index);
+	const distruptionValue = getPathDistruptionValue(path, target)
 
 	if (!path) return null;
 
@@ -304,16 +346,17 @@ const buildNodeRoute = (
 	if (enemySide && extensionCost > CHEAP_ENEMY_ROUTE_COST) return null;
 
 	const isFarLowValueEggRoute = phase === 'EGG_FIRST' &&
-									target.type === EGG &&
-									!contested &&
-									baseDistance > 6 &&
-									target.amount < 14;
+		target.type === EGG &&
+		!contested &&
+		baseDistance > 6 &&
+		target.amount < 14;
 
 	if (isFarLowValueEggRoute) return null
 
 	return {
 		target,
 		effectiveTargetValue,
+		distruptionValue,
 		startIndex,
 		path,
 		distance,
@@ -337,6 +380,7 @@ const compareRoutes = (
 
 	if (preferredA !== preferredB) return preferredB - preferredA;
 	if (a.contested !== b.contested) return Number(b.contested) - Number(a.contested);
+	if (a.distruptionValue !== b.distruptionValue) return b.distruptionValue - a.distruptionValue
 	if (a.enemySide !== b.enemySide) return Number(a.enemySide) - Number(b.enemySide);
 	if (a.baseDistance !== b.baseDistance) return a.baseDistance - b.baseDistance
 	if (a.extensionCost !== b.extensionCost) return a.extensionCost - b.extensionCost;
@@ -362,11 +406,18 @@ const getPhase = (
 ): Phase => {
 	if (eggNodes.length === 0) return 'CRYSTAL_FIRST';
 	if (crystalNodes.length === 0) return 'EGG_FIRST';
-	if (myAnts < eggPhaseAntGoal) return 'EGG_FIRST';
 
 	const remainingEggs = eggNodes.reduce((sum, node) => sum + node.amount, 0) * eggSpawnMultiplier;
 	const remainingCrystals = crystalNodes.reduce((sum, node) => sum + node.amount, 0);
+	const remainingEggRatio = initialEggValue === 0
+		? 0
+		: remainingEggs / initialEggValue
 
+	if (remainingEggRatio <= 0.15) {
+		return 'CRYSTAL_FIRST'
+	}
+
+	if (myAnts < eggPhaseAntGoal) return 'EGG_FIRST'
 	if (remainingEggs > remainingCrystals && myAnts < eggPhaseAntGoal + 12) {
 		return 'EGG_FIRST';
 	}
@@ -393,7 +444,7 @@ const commitRoute = (
 	}
 
 	logs.push(
-		`node:${route.startIndex}->${route.target.index}/t${route.target.type}/d${route.distance}/cost${route.extensionCost}/v${route.corridorValue}/a${route.target.amount}`
+		`node:${route.startIndex}->${route.target.index}/t${route.target.type}/ d${route.distance}/cost${route.extensionCost}/v${route.corridorValue}/x${route.distruptionValue}/a${route.target.amount}`
 	);
 
 	return true;
