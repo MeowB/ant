@@ -158,75 +158,6 @@ const getShortestPathFromStarts = (
 	return null;
 };
 
-const getEggPathScore = (
-	path: number[],
-	targetIndex: number
-): number =>
-	path.reduce((sum, index) => {
-		if (index === targetIndex) return sum;
-
-		const cell = cells[index];
-		if (cell.type !== EGG || cell.resources <= 0) return sum;
-
-		return sum + cell.resources;
-	}, 0);
-
-const getBestEggPathFromStarts = (
-	startIndexes: number[],
-	targetIndex: number
-): number[] | null => {
-	const shortestDistance = getDistancesFromStarts(startIndexes)[targetIndex];
-
-	if (shortestDistance === Number.MAX_SAFE_INTEGER) return null;
-
-	const maxDistance = shortestDistance + 1;
-	const queue: { index: number; path: number[] }[] = [];
-	let bestPath: number[] | null = null;
-	let bestScore = Number.MIN_SAFE_INTEGER;
-	let bestDistance = Number.MAX_SAFE_INTEGER;
-
-	for (const startIndex of startIndexes) {
-		queue.push({
-			index: startIndex,
-			path: [startIndex]
-		});
-	}
-
-	while (queue.length > 0) {
-		const current = queue.shift()!;
-		const currentDistance = current.path.length - 1;
-
-		if (currentDistance > maxDistance) continue;
-
-		if (current.index === targetIndex) {
-			const score = getEggPathScore(current.path, targetIndex);
-			const slack = currentDistance - shortestDistance;
-
-			const isBetter =
-				score > bestScore ||
-				(score === bestScore && slack < bestDistance - shortestDistance);
-
-			if (isBetter) {
-				bestPath = current.path;
-				bestScore = score;
-				bestDistance = currentDistance;
-			}
-			continue;
-		}
-
-		for (const neighbor of cells[current.index].neighbors) {
-			if (neighbor === -1 || current.path.includes(neighbor)) continue;
-
-			queue.push({
-				index: neighbor,
-				path: [...current.path, neighbor]
-			});
-		}
-	}
-
-	return bestPath;
-};
-
 const myBaseDistances = getDistancesFromStarts(myBases);
 const oppBaseDistances = getDistancesFromStarts(oppBases);
 const myBaseDistancesByBase = myBases.map(baseIndex => ({
@@ -383,17 +314,6 @@ const getNodeStrength = (
 	return 1;
 };
 
-const isOpeningEggRush = (
-	node: ResourceNode,
-	phase: Phase,
-	strengths: Map<number, number>
-): boolean =>
-	phase === 'EGG_FIRST' &&
-	node.type === EGG &&
-	node.myBaseDistance <= 5 &&
-	strengths.size === 0 &&
-	node.oppBaseDistance >= node.myBaseDistance;
-
 const getDepletedStrength = (
 	node: ResourceNode,
 	baseStrength: number
@@ -407,9 +327,7 @@ const buildNodeRoute = (
 	phase: Phase,
 	strengthOverride?: number
 ): NodeRoute | null => {
-	const path = phase === 'EGG_FIRST' && target.type === EGG
-		? getBestEggPathFromStarts(anchorIndexes, target.index)
-		: getShortestPathFromStarts(anchorIndexes, target.index);
+	const path = getShortestPathFromStarts(anchorIndexes, target.index);
 
 	if (!path) return null;
 
@@ -429,10 +347,10 @@ const buildNodeRoute = (
 	if (enemySide && extensionCost > CHEAP_ENEMY_ROUTE_COST) return null;
 
 	const isFarLowValueEggRoute = phase === 'EGG_FIRST' &&
-		target.type === EGG &&
-		!contested &&
-		baseDistance > 6 &&
-		target.amount < 14;
+									target.type === EGG &&
+									!contested &&
+									baseDistance > 6 &&
+									target.amount < 14;
 
 	if (isFarLowValueEggRoute) return null
 
@@ -625,12 +543,7 @@ const buildCheckpointPlan = (
 			const candidates = nodes
 				.filter(node => !committedTargets.has(node.index))
 				.filter(node => !blockedTargets.has(node.index))
-				.map(node => {
-					const strengthOverride = isOpeningEggRush(node, phase, strengths) ? 1 :
-						undefined;
-					return buildNodeRoute(node, anchorIndexes, strengths, phase,
-						strengthOverride);
-				})
+				.map(node => buildNodeRoute(node, anchorIndexes, strengths, phase))
 				.filter((route): route is NodeRoute => route !== null)
 				.sort((a, b) => compareRoutes(a, b, phase));
 
